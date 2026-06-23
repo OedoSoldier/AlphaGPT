@@ -1,111 +1,111 @@
-import streamlit as st
-import pandas as pd
 import time
+
+import pandas as pd
+import streamlit as st
+
 from data_service import DashboardService
-from visualizer import plot_pnl_distribution, plot_market_scatter
+from visualizer import plot_industry_amount, plot_market_scatter, plot_price_history
 
 st.set_page_config(
-    page_title="MemeAlpha Commander",
-    page_icon="🐕",
+    page_title="AlphaGPT A-Share Research",
+    page_icon="A",
     layout="wide",
-    initial_sidebar_state="expanded"
+    initial_sidebar_state="expanded",
 )
 
-st.markdown("""
+st.markdown(
+    """
 <style>
-    .metric-card {
-        background-color: #1E1E1E;
-        padding: 15px;
-        border-radius: 10px;
-        border: 1px solid #333;
-    }
     .stDataFrame { border: none; }
 </style>
-""", unsafe_allow_html=True)
+""",
+    unsafe_allow_html=True,
+)
+
 
 @st.cache_resource
 def get_service():
     return DashboardService()
 
+
 svc = get_service()
 
-st.sidebar.title("MemeAlpha Bot")
-st.sidebar.markdown("---")
+st.sidebar.title("AlphaGPT")
+st.sidebar.caption("A-share daily research")
+if st.sidebar.button("Refresh Data"):
+    st.rerun()
 
-with st.sidebar:
-    st.subheader("Wallet Status")
-    bal = svc.get_wallet_balance()
-    st.metric("SOL Balance", f"{bal:.4f} SOL")
-    
-    st.markdown("---")
-    st.subheader("Control Panel")
-    if st.button("Refresh Data"):
-        st.rerun()
-        
-    if st.button("EMERGENCY STOP", type="primary"):
-        with open("STOP_SIGNAL", "w") as f:
-            f.write("STOP")
-        st.error("STOP SIGNAL SENT, Process will terminate on next cycle.")
-
-col1, col2, col3, col4 = st.columns(4)
-portfolio_df = svc.load_portfolio()
+stats = svc.get_database_stats()
 market_df = svc.get_market_overview()
+industry_df = svc.get_industry_overview()
 strategy_data = svc.load_strategy_info()
 
-open_positions = len(portfolio_df)
-total_invested = portfolio_df['initial_cost_sol'].sum() if not portfolio_df.empty else 0.0
-
+col1, col2, col3, col4 = st.columns(4)
 with col1:
-    st.metric("Open Positions", f"{open_positions} / 5")
+    st.metric("Securities", f"{int(stats.get('security_count') or 0):,}")
 with col2:
-    st.metric("Total Invested", f"{total_invested:.2f} SOL")
+    st.metric("Daily Bars", f"{int(stats.get('bar_count') or 0):,}")
 with col3:
-    if not portfolio_df.empty:
-        current_val = (portfolio_df['amount_held'] * portfolio_df['highest_price']).sum()
-        pnl_sol = current_val - total_invested
-        st.metric("Unrealized PnL (Est)", f"{pnl_sol:+.3f} SOL", delta_color="normal")
-    else:
-        st.metric("Unrealized PnL", "0.00 SOL")
+    latest_date = stats.get("latest_trade_date")
+    st.metric("Latest Date", str(latest_date) if latest_date else "N/A")
 with col4:
-    st.metric("Active Strategy", "AlphaGPT-v1", help=str(strategy_data))
+    st.metric("Strategy Market", strategy_data.get("market", "A-share daily"))
 
-tab1, tab2, tab3 = st.tabs(["Portfolio", "Market Scanner", "Logs"])
+tab1, tab2, tab3, tab4 = st.tabs(["Market", "Industries", "Strategy", "Logs"])
 
 with tab1:
-    st.subheader("Active Holdings")
-    if not portfolio_df.empty:
-        # Display Table
-        display_cols = ['symbol', 'entry_price', 'highest_price', 'amount_held', 'pnl_pct', 'is_moonbag']
-        
-        # Format for display
-        show_df = portfolio_df[display_cols].copy()
-        show_df['pnl_pct'] = show_df['pnl_pct'].apply(lambda x: f"{x:.2%}")
-        show_df['entry_price'] = show_df['entry_price'].apply(lambda x: f"{x:.6f}")
-        
-        st.dataframe(show_df, use_container_width=True, hide_index=True)
-        
-        # Display Chart
-        st.plotly_chart(plot_pnl_distribution(portfolio_df), use_container_width=True)
+    if market_df.empty:
+        st.warning("No market data found. Run the Tushare data pipeline first.")
     else:
-        st.info("No active positions. The bot is scanning...")
+        st.plotly_chart(plot_market_scatter(market_df), use_container_width=True)
+        display_df = market_df.copy()
+        display_df["pct_chg"] = display_df["pct_chg"].apply(lambda x: f"{x:.2%}")
+        st.dataframe(display_df, use_container_width=True, hide_index=True)
+
+        choices = market_df["ts_code"].tolist()
+        selected = st.selectbox("Security", choices)
+        if selected:
+            name = market_df.loc[market_df["ts_code"] == selected, "name"].iloc[0]
+            bars_df = svc.get_recent_bars(selected)
+            st.plotly_chart(
+                plot_price_history(bars_df, title=f"{selected} {name} Close"),
+                use_container_width=True,
+            )
 
 with tab2:
-    st.subheader("Top Opportunities (DB Snapshot)")
-    if not market_df.empty:
-        st.plotly_chart(plot_market_scatter(market_df), use_container_width=True)
-        st.dataframe(market_df, use_container_width=True)
+    if industry_df.empty:
+        st.warning("No industry snapshot available.")
     else:
-        st.warning("No market data found in DB. Is the Data Pipeline running?")
+        st.plotly_chart(plot_industry_amount(industry_df), use_container_width=True)
+        show_df = industry_df.copy()
+        show_df["avg_pct_chg"] = show_df["avg_pct_chg"].apply(lambda x: f"{x:.2%}")
+        st.dataframe(show_df, use_container_width=True, hide_index=True)
 
 with tab3:
-    st.subheader("System Logs (Tail 20)")
-    logs = svc.get_recent_logs(20)
+    formula = strategy_data.get("formula", "Not trained yet")
+    if isinstance(formula, list):
+        formula_text = ", ".join(str(x) for x in formula)
+    else:
+        formula_text = str(formula)
+
+    strategy_df = pd.DataFrame(
+        [
+            ("Market", strategy_data.get("market", "A-share daily")),
+            ("Score", strategy_data.get("score", "N/A")),
+            ("Formula", formula_text),
+            ("Features", ", ".join(strategy_data.get("features", []))),
+        ],
+        columns=["Field", "Value"],
+    )
+    st.dataframe(strategy_df, use_container_width=True, hide_index=True)
+
+with tab4:
+    logs = svc.get_recent_logs(50)
     if logs:
         st.code("".join(logs), language="text")
     else:
-        st.caption("No logs found or log file path incorrect.")
+        st.caption("No logs found.")
 
-time.sleep(1) 
-if st.checkbox("Auto-Refresh (30s)", value=True):
+if st.sidebar.checkbox("Auto-refresh 30s", value=False):
     time.sleep(30)
     st.rerun()

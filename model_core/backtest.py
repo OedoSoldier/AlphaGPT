@@ -1,29 +1,48 @@
+import math
+
 import torch
 
-class MemeBacktest:
-    def __init__(self):
-        self.trade_size = 1000.0
-        self.min_liq = 500000.0
-        self.base_fee = 0.0060
+from .config import ModelConfig
+
+
+class AStockBacktest:
+    def __init__(self, trade_cost_rate=None):
+        self.trade_cost_rate = (
+            ModelConfig.TRADE_COST_RATE if trade_cost_rate is None else trade_cost_rate
+        )
 
     def evaluate(self, factors, raw_data, target_ret):
-        liquidity = raw_data['liquidity']
-        signal = torch.sigmoid(factors)
-        is_safe = (liquidity > self.min_liq).float()
-        position = (signal > 0.85).float() * is_safe
-        impact_slippage = self.trade_size / (liquidity + 1e-9)
-        impact_slippage = torch.clamp(impact_slippage, 0.0, 0.05)
-        total_slippage_one_way = self.base_fee + impact_slippage
+        tradable = raw_data.get("tradable_mask")
+        if tradable is None:
+            tradable = torch.ones_like(target_ret)
+        tradable = tradable.float()
+
+        signal = torch.tanh(torch.nan_to_num(factors, nan=0.0))
+        position = (signal > 0).float() * tradable
+
         prev_pos = torch.roll(position, 1, dims=1)
-        prev_pos[:, 0] = 0
+        prev_pos[:, 0] = 0.0
         turnover = torch.abs(position - prev_pos)
-        tx_cost = turnover * total_slippage_one_way
-        gross_pnl = position * target_ret
-        net_pnl = gross_pnl - tx_cost
+
+        net_pnl = position * target_ret - turnover * self.trade_cost_rate
+        net_pnl = torch.nan_to_num(net_pnl, nan=0.0, posinf=0.0, neginf=0.0)
+
+        mean = net_pnl.mean(dim=1)
+        std = net_pnl.std(dim=1) + 1e-6
+        sharpe = mean / std * math.sqrt(252)
         cum_ret = net_pnl.sum(dim=1)
-        big_drawdowns = (net_pnl < -0.05).float().sum(dim=1)
-        score = cum_ret - (big_drawdowns * 2.0)
+        turnover_penalty = turnover.mean(dim=1) * 0.5
+        score = sharpe + cum_ret - turnover_penalty
+
         activity = position.sum(dim=1)
-        score = torch.where(activity < 5, torch.tensor(-10.0, device=score.device), score)
-        final_fitness = torch.median(score)
-        return final_fitness, cum_ret.mean().item()
+        score = torch.where(
+            activity < 20,
+            torch.tensor(-5.0, device=score.device),
+            score,
+        )
+        final_fitness = torch.nanmedian(score)
+        annualized_ret = mean.mean().item() * 252
+        return final_fitness, annualized_ret
+
+
+MemeBacktest = AStockBacktest

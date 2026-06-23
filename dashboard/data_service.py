@@ -1,82 +1,136 @@
 import json
 import os
+
 import pandas as pd
 import sqlalchemy
 from dotenv import load_dotenv
-from solders.pubkey import Pubkey
-from solana.rpc.api import Client
 
 load_dotenv()
+
 
 class DashboardService:
     def __init__(self):
         db_user = os.getenv("DB_USER", "postgres")
         db_pass = os.getenv("DB_PASSWORD", "password")
         db_host = os.getenv("DB_HOST", "localhost")
-        db_name = os.getenv("DB_NAME", "crypto_quant")
-        self.engine = sqlalchemy.create_engine(f"postgresql://{db_user}:{db_pass}@{db_host}:5432/{db_name}")
-        rpc_url = os.getenv("QUICKNODE_RPC_URL", "https://api.mainnet-beta.solana.com")
-        self.rpc = Client(rpc_url)
-        self.wallet_addr = self._get_wallet_address()
+        db_port = os.getenv("DB_PORT", "5432")
+        db_name = os.getenv("DB_NAME", "astock_quant")
+        self.engine = sqlalchemy.create_engine(
+            f"postgresql://{db_user}:{db_pass}@{db_host}:{db_port}/{db_name}"
+        )
 
-    def _get_wallet_address(self):
+    def get_database_stats(self):
+        query = """
+        SELECT
+            (SELECT COUNT(*) FROM securities) AS security_count,
+            (SELECT COUNT(*) FROM daily_bars) AS bar_count,
+            (SELECT MAX(trade_date) FROM daily_bars) AS latest_trade_date
+        """
         try:
-            from solders.keypair import Keypair
-            pk_str = os.getenv("SOLANA_PRIVATE_KEY", "")
-            if "[" in pk_str:
-                kp = Keypair.from_bytes(json.loads(pk_str))
-            else:
-                kp = Keypair.from_base58_string(pk_str)
-            return str(kp.pubkey())
+            return pd.read_sql(query, self.engine).iloc[0].to_dict()
         except Exception:
-            return "Unknown"
-
-    def get_wallet_balance(self):
-        try:
-            resp = self.rpc.get_balance(Pubkey.from_string(self.wallet_addr))
-            return resp.value / 1e9
-        except Exception as e:
-            return 0.0
-
-    def load_portfolio(self):
-        try:
-            with open("portfolio_state.json", "r") as f:
-                data = json.load(f)
-                if not data: return pd.DataFrame()
-                
-                df = pd.DataFrame(data.values())
-                # 计算当前预估 PnL
-                if 'highest_price' in df.columns and 'entry_price' in df.columns:
-                    df['pnl_pct'] = (df['highest_price'] - df['entry_price']) / df['entry_price']
-                return df
-        except FileNotFoundError:
-            return pd.DataFrame()
+            return {
+                "security_count": 0,
+                "bar_count": 0,
+                "latest_trade_date": None,
+            }
 
     def load_strategy_info(self):
         try:
-            with open("best_meme_strategy.json", "r") as f:
+            with open("best_astock_strategy.json", "r") as f:
                 return json.load(f)
         except (FileNotFoundError, json.JSONDecodeError):
-            return {"formula": "Not Trained Yet"}
+            return {"formula": "Not trained yet", "market": "A-share daily"}
 
-    def get_market_overview(self, limit=50):
+    def get_market_overview(self, limit=100):
+        limit = max(1, int(limit))
         query = f"""
-        SELECT t.symbol, o.address, o.close, o.volume, o.liquidity, o.fdv, o.time
-        FROM ohlcv o
-        JOIN tokens t ON o.address = t.address
-        WHERE o.time = (SELECT MAX(time) FROM ohlcv)
-        ORDER BY o.liquidity DESC
+        WITH latest AS (
+            SELECT MAX(trade_date) AS trade_date FROM daily_bars
+        )
+        SELECT
+            s.ts_code,
+            s.symbol,
+            s.name,
+            COALESCE(s.industry, 'Unknown') AS industry,
+            b.trade_date,
+            b.open,
+            b.high,
+            b.low,
+            b.close,
+            b.volume,
+            b.amount,
+            CASE
+                WHEN b.open > 0 THEN (b.close - b.open) / b.open
+                ELSE 0
+            END AS pct_chg
+        FROM daily_bars b
+        JOIN latest l ON b.trade_date = l.trade_date
+        JOIN securities s ON b.ts_code = s.ts_code
+        ORDER BY b.amount DESC NULLS LAST
         LIMIT {limit}
         """
         try:
             return pd.read_sql(query, self.engine)
         except Exception:
             return pd.DataFrame()
-    
+
+    def get_industry_overview(self):
+        query = """
+        WITH latest AS (
+            SELECT MAX(trade_date) AS trade_date FROM daily_bars
+        ),
+        snapshot AS (
+            SELECT
+                COALESCE(s.industry, 'Unknown') AS industry,
+                b.amount,
+                CASE
+                    WHEN b.open > 0 THEN (b.close - b.open) / b.open
+                    ELSE 0
+                END AS pct_chg
+            FROM daily_bars b
+            JOIN latest l ON b.trade_date = l.trade_date
+            JOIN securities s ON b.ts_code = s.ts_code
+        )
+        SELECT
+            industry,
+            COUNT(*) AS security_count,
+            SUM(amount) AS amount,
+            AVG(pct_chg) AS avg_pct_chg
+        FROM snapshot
+        GROUP BY industry
+        ORDER BY amount DESC NULLS LAST
+        """
+        try:
+            return pd.read_sql(query, self.engine)
+        except Exception:
+            return pd.DataFrame()
+
+    def get_recent_bars(self, ts_code, limit=120):
+        if not ts_code:
+            return pd.DataFrame()
+        query = """
+        SELECT trade_date, open, high, low, close, volume, amount
+        FROM daily_bars
+        WHERE ts_code = %(ts_code)s
+        ORDER BY trade_date DESC
+        LIMIT %(limit)s
+        """
+        try:
+            df = pd.read_sql(
+                query,
+                self.engine,
+                params={"ts_code": ts_code, "limit": int(limit)},
+            )
+            return df.sort_values("trade_date")
+        except Exception:
+            return pd.DataFrame()
+
     def get_recent_logs(self, n=50):
         log_file = "strategy.log"
-        if not os.path.exists(log_file): return []
-        
+        if not os.path.exists(log_file):
+            return []
+
         with open(log_file, "r") as f:
             lines = f.readlines()
             return lines[-n:]

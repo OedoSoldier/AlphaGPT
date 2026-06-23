@@ -5,11 +5,11 @@ from .ops import OPS_CONFIG
 
 FEATURE_NAMES = (
     "RET",
-    "LIQ_SCORE",
+    "RET5",
+    "VOL_CHG",
     "PRESSURE",
-    "FOMO",
-    "DEV",
-    "LOG_VOL",
+    "MA_DEV",
+    "AMOUNT_STRENGTH",
 )
 
 

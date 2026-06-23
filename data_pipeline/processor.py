@@ -4,21 +4,29 @@ from loguru import logger
 
 class DataProcessor:
     @staticmethod
-    def clean_ohlcv(df):
-        if df.empty: return df
+    def clean_daily_bars(df):
+        if df.empty:
+            return df
 
-        df = df.drop_duplicates(subset=['time', 'address'], keep='last')
+        df = df.drop_duplicates(subset=['trade_date', 'ts_code'], keep='last')
         
-        df = df.sort_values('time')
+        df = df.sort_values(['ts_code', 'trade_date'])
         df['close'] = df['close'].ffill()
         df['open'] = df['open'].fillna(df['close'])
         df['high'] = df['high'].fillna(df['close'])
         df['low'] = df['low'].fillna(df['close'])
         df['volume'] = df['volume'].fillna(0)
+        df['amount'] = df['amount'].fillna(0)
         
-        df = df[df['close'] > 1e-15]
+        df = df[df['close'] > 0]
         
         return df
+
+    @staticmethod
+    def clean_ohlcv(df):
+        return DataProcessor.clean_daily_bars(
+            df.rename(columns={'time': 'trade_date', 'address': 'ts_code'})
+        )
 
     @staticmethod
     def add_basic_factors(df):

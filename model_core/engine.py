@@ -4,10 +4,11 @@ from tqdm import tqdm
 import json
 
 from .config import ModelConfig
-from .data_loader import CryptoDataLoader
+from .data_loader import AStockDataLoader
 from .alphagpt import AlphaGPT, NewtonSchulzLowRankDecay, StableRankMonitor
 from .vm import StackVM
-from .backtest import MemeBacktest
+from .backtest import AStockBacktest
+from .vocab import FORMULA_VOCAB
 
 class AlphaEngine:
     def __init__(self, use_lord_regularization=True, lord_decay_rate=1e-3, lord_num_iterations=5):
@@ -19,7 +20,7 @@ class AlphaEngine:
             lord_decay_rate: Strength of LoRD regularization
             lord_num_iterations: Number of Newton-Schulz iterations per step
         """
-        self.loader = CryptoDataLoader()
+        self.loader = AStockDataLoader()
         self.loader.load_data()
         
         self.model = AlphaGPT().to(ModelConfig.DEVICE)
@@ -45,7 +46,7 @@ class AlphaEngine:
             self.rank_monitor = None
         
         self.vm = StackVM()
-        self.bt = MemeBacktest()
+        self.bt = AStockBacktest()
         
         self.best_score = -float('inf')
         self.best_formula = None
@@ -57,10 +58,10 @@ class AlphaEngine:
         }
 
     def train(self):
-        print("🚀 Starting Meme Alpha Mining with LoRD Regularization..." if self.use_lord else "🚀 Starting Meme Alpha Mining...")
+        print("Starting A-share Alpha Mining with LoRD Regularization..." if self.use_lord else "Starting A-share Alpha Mining...")
         if self.use_lord:
-            print(f"   LoRD Regularization enabled")
-            print(f"   Target keywords: ['q_proj', 'k_proj', 'attention', 'qk_norm']")
+            print("   LoRD Regularization enabled")
+            print("   Target keywords: ['q_proj', 'k_proj', 'attention', 'qk_norm']")
         
         pbar = tqdm(range(ModelConfig.TRAIN_STEPS))
         
@@ -103,7 +104,7 @@ class AlphaEngine:
                 if score.item() > self.best_score:
                     self.best_score = score.item()
                     self.best_formula = formula
-                    tqdm.write(f"[!] New King: Score {score:.2f} | Ret {ret_val:.2%} | Formula {formula}")
+                    tqdm.write(f"[!] New best: Score {score:.2f} | AnnRet {ret_val:.2%} | Formula {formula}")
             
             # Normalize rewards
             adv = (rewards - rewards.mean()) / (rewards.std() + 1e-5)
@@ -139,15 +140,24 @@ class AlphaEngine:
             pbar.set_postfix(postfix_dict)
 
         # Save best formula
-        with open("best_meme_strategy.json", "w") as f:
-            json.dump(self.best_formula, f)
+        with open("best_astock_strategy.json", "w") as f:
+            json.dump(
+                {
+                    "formula": self.best_formula,
+                    "score": self.best_score,
+                    "features": list(FORMULA_VOCAB.feature_names),
+                    "market": "A-share daily",
+                },
+                f,
+                indent=2,
+            )
         
         # Save training history
         import json as js
         with open("training_history.json", "w") as f:
             js.dump(self.training_history, f)
         
-        print(f"\n✓ Training completed!")
+        print("\nTraining completed!")
         print(f"  Best score: {self.best_score:.4f}")
         print(f"  Best formula: {self.best_formula}")
 
