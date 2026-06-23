@@ -57,6 +57,7 @@ class Config:
     TUSHARE_INCREMENTAL = _get_bool("TUSHARE_INCREMENTAL", True)
     TUSHARE_REQUEST_INTERVAL_SECONDS = _get_float("TUSHARE_REQUEST_INTERVAL_SECONDS", 0.25)
     TUSHARE_MAX_RETRIES = _get_int("TUSHARE_MAX_RETRIES", 3)
+    TUSHARE_NO_PROXY = _get_bool("TUSHARE_NO_PROXY", True)
 
     # Legacy crypto settings kept so old modules remain importable when the
     # optional crypto-legacy dependencies are installed.

@@ -64,6 +64,7 @@ TUSHARE_END_DATE=
 TUSHARE_INCREMENTAL=true
 TUSHARE_REQUEST_INTERVAL_SECONDS=0.25
 TUSHARE_MAX_RETRIES=3
+TUSHARE_NO_PROXY=true
 TUSHARE_MIN_LIST_DAYS=180
 TUSHARE_EXCLUDE_ST=true
 TUSHARE_UNIVERSE_LIMIT=0
@@ -79,6 +80,8 @@ uv run python -m data_pipeline.run_pipeline
 ```
 
 `TUSHARE_ADJ=qfq` 是默认设置，表示使用前复权行情。也可以设置为 `hfq` 使用后复权，或设置为 `none` / `raw` 使用未复权日线。
+
+如果系统环境配置了代理，数据管线默认会在连接 Tushare 时临时绕过代理。保持 `TUSHARE_NO_PROXY=true` 即可；只有明确希望 Tushare 也走代理时才改成 `false`。
 
 ## 数据模型
 

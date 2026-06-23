@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import os
 import time
+from contextlib import contextmanager
 from datetime import date, datetime, timedelta
 from typing import Iterable
 
@@ -29,8 +31,45 @@ class TushareProvider:
         self.token = token if token is not None else Config.TUSHARE_TOKEN
         self.pro = pro_client
         if self.pro is None and self.token:
-            ts.set_token(self.token)
-            self.pro = ts.pro_api(self.token)
+            with self._without_proxy():
+                ts.set_token(self.token)
+                self.pro = ts.pro_api(self.token)
+
+    @staticmethod
+    @contextmanager
+    def _without_proxy():
+        proxy_keys = (
+            "HTTP_PROXY",
+            "HTTPS_PROXY",
+            "ALL_PROXY",
+            "http_proxy",
+            "https_proxy",
+            "all_proxy",
+        )
+        no_proxy_keys = ("NO_PROXY", "no_proxy")
+        if not Config.TUSHARE_NO_PROXY:
+            yield
+            return
+
+        saved = {key: os.environ.get(key) for key in proxy_keys + no_proxy_keys}
+        try:
+            for key in proxy_keys:
+                os.environ.pop(key, None)
+            no_proxy_hosts = ["api.tushare.pro", "tushare.pro"]
+            for key in no_proxy_keys:
+                current = os.environ.get(key, "")
+                parts = [item.strip() for item in current.split(",") if item.strip()]
+                for host in no_proxy_hosts:
+                    if host not in parts:
+                        parts.append(host)
+                os.environ[key] = ",".join(parts)
+            yield
+        finally:
+            for key, value in saved.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
 
     def _require_client(self):
         if self.pro is None:
@@ -143,7 +182,8 @@ class TushareProvider:
     def get_stock_universe(self, limit: int | None = None) -> pd.DataFrame:
         pro = self._require_client()
         fields = "ts_code,symbol,name,area,industry,market,exchange,list_date,list_status"
-        raw = pro.stock_basic(exchange="", list_status="L", fields=fields)
+        with self._without_proxy():
+            raw = pro.stock_basic(exchange="", list_status="L", fields=fields)
         return self.normalize_stock_basic(
             raw,
             min_list_days=Config.TUSHARE_MIN_LIST_DAYS,
@@ -244,15 +284,16 @@ class TushareProvider:
 
         for attempt in range(1, max_retries + 1):
             try:
-                raw = ts.pro_bar(
-                    ts_code=ts_code,
-                    start_date=start_date,
-                    end_date=end_date,
-                    freq="D",
-                    asset="E",
-                    adj=normalized_adj,
-                    pro_api=self.pro,
-                )
+                with self._without_proxy():
+                    raw = ts.pro_bar(
+                        ts_code=ts_code,
+                        start_date=start_date,
+                        end_date=end_date,
+                        freq="D",
+                        asset="E",
+                        adj=normalized_adj,
+                        api=self.pro,
+                    )
                 return self.normalize_daily_bars(raw, source=source)
             except Exception as exc:
                 logger.warning(
